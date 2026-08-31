@@ -1,0 +1,14 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+
+# Regenerable pipeline output (rebuild: python scripts/data_cleaning.py)
+data/processed/
+
+# Secrets
+.env
+
+# macOS
+.DS_Store
