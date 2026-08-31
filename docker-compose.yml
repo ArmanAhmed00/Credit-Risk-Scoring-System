@@ -1,0 +1,171 @@
+# Production credit risk scoring stack.
+#
+#   postgres-db       metadata DB for Airflow + processed_features table
+#   mlflow-server     tracking server + model registry (SQLite backend)
+#   airflow           scheduler + webserver, runs the pipeline DAGs
+#   fastapi-inference serves CreditRiskModel over HTTP
+#
+# Copy .env.example to .env and fill it in before `make up`.
+
+services:
+  postgres-db:
+    image: postgres:14
+    container_name: credit-risk-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [credit-risk]
+
+  mlflow-server:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: credit-risk-mlflow
+    restart: unless-stopped
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    volumes:
+      - ./mlflow:/mlflow
+    # sqlite://// (four slashes) is an absolute path. A file-store backend
+    # cannot host the Model Registry, so a DB backend is required here.
+    command: >
+      bash -c "
+        mkdir -p /mlflow/artifacts &&
+        exec mlflow server
+          --backend-store-uri sqlite:////mlflow/mlflow.db
+          --default-artifact-root /mlflow/artifacts
+          --host 0.0.0.0
+          --port 5000
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:5000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [credit-risk]
+
+  airflow:
+    image: apache/airflow:2.6.0-python3.10
+    container_name: credit-risk-airflow
+    restart: unless-stopped
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      mlflow-server:
+        condition: service_started
+    user: "${AIRFLOW_UID:-50000}:0"
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+        postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-db:5432/${POSTGRES_DB}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+
+      # Airflow Variables can be seeded from env as AIRFLOW_VAR_<UPPERCASE_KEY>,
+      # so the DAGs resolve their paths without a manual `airflow variables set`.
+      AIRFLOW_VAR_CREDIT_RISK_PROJECT_ROOT: /opt/airflow/project
+      # credit_risk_python is deliberately NOT set: the DAGs fall back to
+      # sys.executable, which is the interpreter Airflow itself runs and
+      # therefore the one the pip install below targets.
+      AIRFLOW_VAR_CREDIT_RISK_PG_TABLE: ${PG_FEATURES_TABLE:-processed_features}
+      AIRFLOW_VAR_CREDIT_RISK_MODEL_NAME: ${MODEL_NAME:-CreditRiskModel}
+      AIRFLOW_VAR_DRIFT_SHARE_THRESHOLD: ${DRIFT_SHARE_THRESHOLD:-0.3}
+      AIRFLOW_VAR_DRIFT_LOOKBACK_DAYS: ${DRIFT_LOOKBACK_DAYS:-7}
+
+      MLFLOW_TRACKING_URI: http://mlflow-server:5000
+
+      # Consumed by scripts/ and the save_to_postgres task.
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      RAW_DATA_PATH: /opt/airflow/project/data/credit_risk_dataset.csv
+      PROCESSED_DATA_PATH: /opt/airflow/project/data/processed/features.csv
+      PREDICTION_LOG_PATH: /opt/airflow/project/data/processed/prediction_log.jsonl
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./data:/opt/airflow/project/data
+      - ./scripts:/opt/airflow/project/scripts
+      # monitoring/ is required by the drift_monitoring DAG.
+      - ./monitoring:/opt/airflow/project/monitoring
+      - ./mlflow:/mlflow
+    command: >
+      bash -c "
+        pip install --no-cache-dir
+          xgboost lightgbm scikit-learn pandas mlflow shap matplotlib
+          psycopg2-binary sqlalchemy evidently &&
+        airflow db init &&
+        (airflow users create
+          --username ${AIRFLOW_ADMIN_USER:-admin}
+          --password ${AIRFLOW_ADMIN_PASSWORD:-admin}
+          --firstname Admin --lastname User --role Admin
+          --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} || true) &&
+        airflow scheduler &
+        exec airflow webserver
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks: [credit-risk]
+
+  fastapi-inference:
+    # Context is the repo root, not ./api: api/Dockerfile copies api/requirements.txt,
+    # a path that only exists from the root. Same image, working COPY paths.
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: credit-risk-api
+    restart: unless-stopped
+    depends_on:
+      mlflow-server:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      MODEL_URI: ${MODEL_URI:-models:/CreditRiskModel/Production}
+      MLFLOW_TRACKING_URI: http://mlflow-server:5000
+      ENCODING_MAPS_PATH: /app/data/processed/encoding_maps.json
+      PREDICTION_LOG_PATH: /app/data/processed/prediction_log.jsonl
+    volumes:
+      - ./data:/app/data
+      # Artifacts resolve to local /mlflow/artifacts paths, so this container
+      # needs the same mount the tracking server writes to.
+      - ./mlflow:/mlflow
+    healthcheck:
+      # python:3.10-slim ships no curl; a curl healthcheck would always fail.
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks: [credit-risk]
+
+volumes:
+  postgres_data:
+    name: credit_risk_postgres_data
+
+networks:
+  credit-risk:
+    name: credit-risk
+    driver: bridge
