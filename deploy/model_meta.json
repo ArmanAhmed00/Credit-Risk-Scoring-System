@@ -1,0 +1,9 @@
+{
+  "source_uri": "models:/CreditRiskModel/Production",
+  "model_version": "1",
+  "flavors": [
+    "python_function",
+    "xgboost"
+  ],
+  "model_file": "model.ubj"
+}

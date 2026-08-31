@@ -101,9 +101,6 @@ def get_data_path() -> Path:
     return Path(os.environ.get("PROCESSED_DATA_PATH", DEFAULT_DATA_PATH))
 
 
-# --------------------------------------------------------------------------
-# Encoding contract export
-# --------------------------------------------------------------------------
 def export_encoding_maps(path: str | Path | None = None) -> Path:
     """Write the encoding maps the FastAPI inference server must reuse.
 
@@ -126,9 +123,6 @@ def export_encoding_maps(path: str | Path | None = None) -> Path:
     return out
 
 
-# --------------------------------------------------------------------------
-# Data
-# --------------------------------------------------------------------------
 def load_data(path: str | Path | None = None) -> pd.DataFrame:
     data_path = Path(path) if path is not None else get_data_path()
     logger.info("Loading training data from %s", data_path)
@@ -166,9 +160,6 @@ def split_data(df: pd.DataFrame):
     return X_train, X_val, y_train, y_val
 
 
-# --------------------------------------------------------------------------
-# Models
-# --------------------------------------------------------------------------
 def build_xgb() -> XGBClassifier:
     return XGBClassifier(**XGB_PARAMS)
 

@@ -24,20 +24,21 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from airflow import DAG
 from airflow.exceptions import AirflowException
 from airflow.models import Variable
 
+from airflow import DAG
+
 try:
-    from airflow.operators.python import BranchPythonOperator, PythonOperator
     from airflow.operators.empty import EmptyOperator
+    from airflow.operators.python import BranchPythonOperator, PythonOperator
     from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 except ImportError:  # pragma: no cover - Airflow 3 layout
+    from airflow.providers.standard.operators.empty import EmptyOperator
     from airflow.providers.standard.operators.python import (
         BranchPythonOperator,
         PythonOperator,
     )
-    from airflow.providers.standard.operators.empty import EmptyOperator
     from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 log = logging.getLogger(__name__)

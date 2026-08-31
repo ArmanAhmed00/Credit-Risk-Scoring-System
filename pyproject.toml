@@ -5,3 +5,85 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "scripts"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--cov=api",
+    "--cov=scripts",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    "--cov-fail-under=70",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
+]
+markers = [
+    "slow: tests that train a full model",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["api", "scripts", "app"]
+omit = [
+    "*/__pycache__/*",
+    "*/tests/*",
+    # Airflow DAGs and the drift monitor need an Airflow/Evidently runtime;
+    # they are verified by DAG-parse and integration runs, not unit tests.
+    "airflow/*",
+    "monitoring/*",
+    # Streamlit page body needs a Streamlit runtime to execute; all of its
+    # API logic lives in app/client.py, which is fully tested.
+    "app/streamlit_app.py",
+]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".venv", "__pycache__", "mlruns", "monitoring/reports"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter
+    "B008",  # FastAPI depends() pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Airflow DAGs assign operators without using the names; tests re-import fixtures.
+"airflow/dags/*" = ["F401"]
+"tests/*" = ["F811", "F401"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+extend-exclude = '''
+/(
+  \.venv
+  | mlruns
+  | monitoring/reports
+)/
+'''

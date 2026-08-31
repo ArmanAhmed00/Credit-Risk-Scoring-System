@@ -1,0 +1,12 @@
+# Vercel serverless build only.
+#
+# Deliberately excludes mlflow (53 MB) and its pyarrow dependency (123 MB):
+# together they blow past Vercel's 250 MB unzipped limit. The function serves
+# the exported booster in deploy/ instead of calling the registry.
+#
+# Local development and CI use requirements-dev.txt.
+fastapi==0.141.1
+pydantic==2.13.5
+numpy==2.2.6
+pandas==2.3.3
+xgboost==3.2.0

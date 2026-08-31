@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install system libraries
+        # xgboost and lightgbm both link against libgomp at import time.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgomp1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Run tests with coverage
+        # --cov-fail-under=70 also comes from pyproject.toml; stated here so the
+        # gate is visible in the workflow rather than buried in config.
+        run: pytest --cov=api --cov=scripts --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
+
+  dag-validation:
+    name: Airflow DAG import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Airflow
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==2.10.5"
+
+      - name: Verify DAGs import without errors
+        # A DAG that fails to import never runs and never alerts, so this is
+        # checked separately from the unit tests.
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+        run: |
+          airflow db migrate
+          python - <<'PY'
+          from airflow.models import DagBag
+          bag = DagBag(dag_folder="airflow/dags", include_examples=False)
+          if bag.import_errors:
+              for path, err in bag.import_errors.items():
+                  print(f"::error file={path}::{err}")
+              raise SystemExit(1)
+          print("DAGs imported cleanly:", sorted(bag.dag_ids))
+          PY

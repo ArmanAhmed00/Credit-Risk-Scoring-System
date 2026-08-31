@@ -101,9 +101,6 @@ def raising_client(stub_model, tmp_path, monkeypatch):
         yield c
 
 
-# --------------------------------------------------------------------------
-# Health
-# --------------------------------------------------------------------------
 def test_lifespan_loaded_model_and_maps(client):
     """The startup hook actually populated the bundle."""
     assert api_main.bundle.is_ready
@@ -129,9 +126,6 @@ def test_health_503_when_model_missing(client, monkeypatch):
     assert r.json()["status"] == "degraded"
 
 
-# --------------------------------------------------------------------------
-# Predict - happy path
-# --------------------------------------------------------------------------
 def test_predict_valid(client):
     r = client.post("/predict", json=VALID_PAYLOAD)
     assert r.status_code == 200
@@ -156,9 +150,6 @@ def test_predict_categoricals_are_case_insensitive(client):
     assert client.post("/predict", json=payload).status_code == 200
 
 
-# --------------------------------------------------------------------------
-# Risk label thresholds: LOW < 0.3, MEDIUM 0.3-0.6, HIGH > 0.6
-# --------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "probability,expected",
     [
@@ -189,9 +180,6 @@ def test_threshold_boundaries_are_exclusive_of_low_inclusive_of_medium():
     assert api_main.classify_risk(0.6000001) == "HIGH"
 
 
-# --------------------------------------------------------------------------
-# Validation - 422
-# --------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "field,bad_value",
     [
@@ -244,9 +232,6 @@ def test_wrong_type_returns_422(client):
     assert r.status_code == 422
 
 
-# --------------------------------------------------------------------------
-# 503 when the model is not loaded
-# --------------------------------------------------------------------------
 def test_predict_503_when_model_not_loaded(client, monkeypatch):
     monkeypatch.setattr(api_main.bundle, "model", None)
     r = client.post("/predict", json=VALID_PAYLOAD)
@@ -259,9 +244,6 @@ def test_predict_503_when_encoding_maps_missing(client, monkeypatch):
     assert client.post("/predict", json=VALID_PAYLOAD).status_code == 503
 
 
-# --------------------------------------------------------------------------
-# 500 on unexpected errors
-# --------------------------------------------------------------------------
 def test_unexpected_error_returns_500(raising_client, stub_model, monkeypatch):
     def boom(frame):
         raise RuntimeError("model exploded")
@@ -273,18 +255,12 @@ def test_unexpected_error_returns_500(raising_client, stub_model, monkeypatch):
     assert "exploded" not in r.text
 
 
-# --------------------------------------------------------------------------
-# Middleware
-# --------------------------------------------------------------------------
 def test_response_time_header_present(client):
     r = client.get("/health")
     assert "x-response-time-ms" in {k.lower() for k in r.headers}
     assert float(r.headers["x-response-time-ms"]) >= 0
 
 
-# --------------------------------------------------------------------------
-# Prediction logging
-# --------------------------------------------------------------------------
 def test_prediction_is_logged(client):
     body = client.post("/predict", json=VALID_PAYLOAD).json()
 
@@ -312,9 +288,6 @@ def test_failed_requests_are_not_logged(client):
     assert not client.log_path.exists() or client.log_path.read_text().strip() == ""
 
 
-# --------------------------------------------------------------------------
-# Feature engineering parity with training
-# --------------------------------------------------------------------------
 def test_feature_row_matches_expected_math():
     row = build_feature_row(VALID_PAYLOAD, ENCODING_MAPS)
     assert row["debt_to_income"] == pytest.approx(10000 / 60000)
@@ -330,6 +303,7 @@ def test_feature_row_matches_expected_math():
 def test_api_constants_match_data_cleaning():
     """api/features.py duplicates the cleaning constants; pin them together."""
     import data_cleaning
+
     from api import features
 
     assert features.INCOME_SERVICEABLE_SHARE == data_cleaning.INCOME_SERVICEABLE_SHARE
@@ -355,3 +329,95 @@ def test_exported_encoding_maps_file_is_loadable():
     maps = api_main.load_encoding_maps(path)
     row = build_feature_row(VALID_PAYLOAD, maps)
     assert list(row) == FEATURE_ORDER
+
+
+def test_health_via_shared_client(test_client):
+    r = test_client.get("/health")
+    assert r.status_code == 200
+    assert r.json()["model_name"] == "CreditRiskModel"
+    assert r.json()["model_version"] == "test-1"
+
+
+def test_predict_via_shared_client(test_client, valid_payload):
+    r = test_client.post("/predict", json=valid_payload)
+    assert r.status_code == 200
+
+    body = r.json()
+    assert 0.0 <= body["default_probability"] <= 1.0
+    assert body["risk_label"] in {"LOW", "MEDIUM", "HIGH"}
+
+
+def test_invalid_input_422_via_shared_client(test_client, valid_payload):
+    r = test_client.post("/predict", json={**valid_payload, "person_age": 12})
+    assert r.status_code == 422
+
+
+def test_prediction_log_written_via_shared_client(test_client, valid_payload):
+    """prediction_log.jsonl must exist and hold one record per success."""
+    body = test_client.post("/predict", json=valid_payload).json()
+
+    assert test_client.log_path.exists()
+    entries = [json.loads(x) for x in test_client.log_path.read_text().strip().splitlines()]
+    assert len(entries) == 1
+    assert entries[0]["request_id"] == body["request_id"]
+    assert entries[0]["inputs"] == valid_payload
+    assert entries[0]["model_version"] == "test-1"
+
+
+def test_dummy_model_is_used_by_shared_client(test_client, mock_model, valid_payload):
+    """The DummyClassifier fixture really is what the app scores with."""
+    expected = float(mock_model.predict_proba([[0.0] * 14])[0][1])
+    body = test_client.post("/predict", json=valid_payload).json()
+    assert body["default_probability"] == pytest.approx(expected)
+
+
+# Bundle mode: serving a plain model file with no MLflow available. This is how
+# the app runs on serverless hosts, where mlflow is too large to bundle.
+
+def test_bundle_mode_skips_the_registry(monkeypatch, tmp_path):
+    """With MODEL_BUNDLE_PATH set, no registry lookup happens."""
+    monkeypatch.setenv(api_main.MODEL_BUNDLE_ENV, str(tmp_path / "model.ubj"))
+    assert api_main.resolve_model_version() == "bundle"
+
+    monkeypatch.setenv("MODEL_VERSION", "7")
+    assert api_main.resolve_model_version() == "7"
+
+
+def test_bundle_mode_reports_a_missing_file(monkeypatch, tmp_path):
+    missing = tmp_path / "nope.ubj"
+    monkeypatch.setenv(api_main.MODEL_BUNDLE_ENV, str(missing))
+    with pytest.raises(FileNotFoundError, match="Model bundle not found"):
+        api_main.load_model()
+
+
+def test_bundle_round_trip_matches_the_registry_model(tmp_path, monkeypatch):
+    """A booster saved to disk and reloaded must score identically."""
+    xgb = pytest.importorskip("xgboost")
+    import numpy as np
+    import pandas as pd
+
+    from api.features import FEATURE_ORDER
+
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(rng.random((60, len(FEATURE_ORDER))), columns=FEATURE_ORDER)
+    y = (rng.random(60) > 0.5).astype(int)
+    model = xgb.XGBClassifier(n_estimators=10, max_depth=3).fit(X, y)
+
+    path = tmp_path / "model.ubj"
+    model.get_booster().save_model(str(path))
+
+    monkeypatch.setenv(api_main.MODEL_BUNDLE_ENV, str(path))
+    booster = api_main.load_model()
+
+    row = {c: float(v) for c, v in zip(FEATURE_ORDER, X.iloc[0], strict=True)}
+    assert api_main.predict_probability(booster, row) == pytest.approx(
+        float(model.predict_proba(X.head(1))[0][1]), abs=1e-6
+    )
+
+
+def test_audit_log_falls_back_to_stdout_on_readonly_fs(caplog):
+    """A read-only filesystem must not silently lose the audit trail."""
+    entry = {"request_id": "abc", "risk_label": "LOW"}
+    with caplog.at_level("INFO", logger="credit_risk_api"):
+        api_main.write_prediction_log(entry, path="/proc/definitely-not-writable/log.jsonl")
+    assert any("PREDICTION_LOG" in r.message for r in caplog.records)

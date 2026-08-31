@@ -19,9 +19,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# --------------------------------------------------------------------------
-# Logging: stdout so Airflow's task log captures every stage.
-# --------------------------------------------------------------------------
 logger = logging.getLogger("data_cleaning")
 
 if not logger.handlers:
@@ -33,10 +30,8 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-# --------------------------------------------------------------------------
-# Fixed encoding maps. These are part of the model contract: training and
-# inference MUST use these exact values, so they are hardcoded, never fitted.
-# --------------------------------------------------------------------------
+# Hardcoded on purpose. Training and inference have to agree on these, so
+# they're never fitted from data.
 HOME_OWNERSHIP_MAP = {"RENT": 0, "OWN": 1, "MORTGAGE": 2, "OTHER": 3}
 
 LOAN_GRADE_MAP = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
@@ -52,14 +47,14 @@ LOAN_INTENT_MAP = {
     "DEBTCONSOLIDATION": 5,
 }
 
-# Outlier thresholds (data entry errors, per data inspection).
+# Data entry errors, not real values.
 MAX_PERSON_AGE = 100
 MAX_EMP_LENGTH = 60
 
-# Assumed share of income available to service debt, for credit_utilization.
+# Share of income assumed available to service debt.
 INCOME_SERVICEABLE_SHARE = 0.3
 
-# Exact output contract: these 15 columns, in this order.
+# The output contract: these 15 columns, in this order.
 OUTPUT_COLUMNS = [
     "person_age",
     "person_income",
@@ -107,9 +102,6 @@ def get_processed_path() -> Path:
     return Path(os.environ.get("PROCESSED_DATA_PATH", DEFAULT_PROCESSED_PATH))
 
 
-# --------------------------------------------------------------------------
-# Stage 1: load
-# --------------------------------------------------------------------------
 def load_raw(path: str | Path | None = None) -> pd.DataFrame:
     """Load the raw CSV and verify the expected schema is present."""
     raw_path = Path(path) if path is not None else get_raw_path()
@@ -139,9 +131,6 @@ def load_raw(path: str | Path | None = None) -> pd.DataFrame:
     return df
 
 
-# --------------------------------------------------------------------------
-# Stage 2: outliers
-# --------------------------------------------------------------------------
 def remove_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """Drop rows with impossible person_age or person_emp_length values."""
     logger.info("STAGE remove_outliers | input rows: %d", len(df))
@@ -171,9 +160,6 @@ def remove_outliers(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# --------------------------------------------------------------------------
-# Stage 3: nulls
-# --------------------------------------------------------------------------
 def fill_nulls(df: pd.DataFrame, int_rate_median: float | None = None) -> pd.DataFrame:
     """Fill loan_int_rate with the median and person_emp_length with 0.
 
@@ -207,9 +193,6 @@ def fill_nulls(df: pd.DataFrame, int_rate_median: float | None = None) -> pd.Dat
     return df
 
 
-# --------------------------------------------------------------------------
-# Stage 4: categorical encoding
-# --------------------------------------------------------------------------
 def encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
     """Apply the fixed encoding maps, failing loudly on unseen categories."""
     logger.info("STAGE encode_categoricals | input rows: %d", len(df))
@@ -246,9 +229,6 @@ def encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# --------------------------------------------------------------------------
-# Stage 5: feature engineering
-# --------------------------------------------------------------------------
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Build the three ratio features.
 
@@ -290,9 +270,6 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# --------------------------------------------------------------------------
-# Stage 6: validation
-# --------------------------------------------------------------------------
 def validate(df: pd.DataFrame) -> pd.DataFrame:
     """Select the 15 output columns and assert the output contract.
 
@@ -313,7 +290,7 @@ def validate(df: pd.DataFrame) -> pd.DataFrame:
     if non_finite.any():
         bad_rows = non_finite.any(axis=1)
         per_col = {
-            c: int(n) for c, n in zip(numeric.columns, non_finite.sum(axis=0)) if n
+            c: int(n) for c, n in zip(numeric.columns, non_finite.sum(axis=0), strict=True) if n
         }
         logger.warning(
             "STAGE validate | dropping %d rows with NaN/inf values: %s",
@@ -370,9 +347,6 @@ def validate(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# --------------------------------------------------------------------------
-# Orchestration
-# --------------------------------------------------------------------------
 def run_cleaning(
     raw_path: str | Path | None = None,
     processed_path: str | Path | None = None,

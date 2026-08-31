@@ -1,0 +1,27 @@
+# Dependencies for running the test suite in CI.
+#
+# Pinned for Python 3.10, matching api/Dockerfile's python:3.10-slim base.
+# Resolved against 3.10 specifically: numpy>=2.3 and scikit-learn>=1.8 have
+# dropped 3.10, so a 3.12-derived pin set will not install here.
+pandas==2.3.3
+numpy==2.2.6
+scikit-learn==1.7.2
+xgboost==3.2.0
+lightgbm==4.7.0
+mlflow==3.15.2
+shap==0.49.1
+matplotlib==3.10.9
+
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+httpx==0.28.1
+sqlalchemy==2.0.52
+
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.5
+black==26.5.1
+
+# Streamlit UI (render tests)
+streamlit==1.62.0

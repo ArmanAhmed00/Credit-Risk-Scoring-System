@@ -81,9 +81,6 @@ def get_report_dir() -> Path:
     return Path(os.environ.get("DRIFT_REPORT_DIR", DEFAULT_REPORT_DIR))
 
 
-# --------------------------------------------------------------------------
-# Loading
-# --------------------------------------------------------------------------
 def load_reference(path: str | Path | None = None, sample_size: int = REFERENCE_SAMPLE_SIZE) -> pd.DataFrame:
     """Load the training features, sampled for speed.
 
@@ -177,9 +174,6 @@ def align_columns(reference: pd.DataFrame, current: pd.DataFrame) -> tuple[pd.Da
     return reference[shared].copy(), current[shared].astype("float64").copy()
 
 
-# --------------------------------------------------------------------------
-# Drift
-# --------------------------------------------------------------------------
 def run_drift_report(reference: pd.DataFrame, current: pd.DataFrame, drift_share_threshold: float):
     """Run Evidently's DataDriftPreset and return the resulting snapshot."""
     from evidently import Report
@@ -307,9 +301,6 @@ def print_summary(results: dict) -> None:
     logger.info("=" * 70)
 
 
-# --------------------------------------------------------------------------
-# Entry point
-# --------------------------------------------------------------------------
 def run_monitoring() -> bool:
     """Full drift check. Returns True when retraining is recommended."""
     threshold = _env_float("DRIFT_SHARE_THRESHOLD", DEFAULT_DRIFT_SHARE_THRESHOLD)

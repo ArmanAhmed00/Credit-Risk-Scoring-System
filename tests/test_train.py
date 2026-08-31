@@ -20,9 +20,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import train  # noqa: E402
 
 
-# --------------------------------------------------------------------------
-# Fixtures
-# --------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def dataset() -> pd.DataFrame:
     """The real cleaned dataset; skip if the cleaning stage hasn't been run."""
@@ -55,9 +52,6 @@ def mock_mlflow():
         yield m
 
 
-# --------------------------------------------------------------------------
-# 1. Models train without error
-# --------------------------------------------------------------------------
 def test_xgboost_trains_without_error(dataset):
     X_train, X_val, y_train, y_val = train.split_data(dataset)
     model = train.build_xgb()
@@ -78,9 +72,6 @@ def test_lightgbm_trains_without_error(dataset):
     assert ((proba >= 0) & (proba <= 1)).all()
 
 
-# --------------------------------------------------------------------------
-# 2. AUC > 0.7 on the dataset
-# --------------------------------------------------------------------------
 @pytest.mark.parametrize("builder", ["build_xgb", "build_lgbm"])
 def test_auc_above_threshold(dataset, builder):
     X_train, X_val, y_train, y_val = train.split_data(dataset)
@@ -95,9 +86,6 @@ def test_auc_above_threshold(dataset, builder):
         assert 0.0 <= metrics[key] <= 1.0
 
 
-# --------------------------------------------------------------------------
-# 3. encoding_maps.json is created
-# --------------------------------------------------------------------------
 def test_encoding_maps_created(tmp_path):
     out = tmp_path / "encoding_maps.json"
     result = train.export_encoding_maps(out)
@@ -132,9 +120,6 @@ def test_encoding_maps_creates_parent_dir(tmp_path):
     assert out.exists()
 
 
-# --------------------------------------------------------------------------
-# Split behaviour
-# --------------------------------------------------------------------------
 def test_split_is_stratified_and_reproducible(dataset):
     """Pin the split against an independent reference.
 
@@ -181,9 +166,6 @@ def test_features_exclude_label(dataset):
     assert len(train.FEATURE_COLUMNS) == 14
 
 
-# --------------------------------------------------------------------------
-# Hyperparameters match the specified configuration
-# --------------------------------------------------------------------------
 def test_xgb_hyperparameters():
     p = train.build_xgb().get_params()
     assert p["n_estimators"] == 300
@@ -205,9 +187,6 @@ def test_lgbm_hyperparameters():
     assert p["metric"] == "auc"
 
 
-# --------------------------------------------------------------------------
-# Registry: only the winner is registered
-# --------------------------------------------------------------------------
 def test_only_winner_is_registered(mock_mlflow):
     results = [
         {"name": "xgboost", "metrics": {"auc_roc": 0.94, "f1_score": 0.8,
@@ -260,9 +239,6 @@ def test_no_tracking_server_contacted(mock_mlflow, tmp_path, monkeypatch):
     mock_mlflow.set_tracking_uri.assert_not_called()
 
 
-# --------------------------------------------------------------------------
-# Env var handling
-# --------------------------------------------------------------------------
 def test_tracking_uri_default_and_override(monkeypatch):
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
     assert train.get_tracking_uri() == "http://localhost:5000"
@@ -283,3 +259,41 @@ def test_load_data_missing_file_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("PROCESSED_DATA_PATH", str(tmp_path / "nope.csv"))
     with pytest.raises(FileNotFoundError, match="Run scripts/data_cleaning.py"):
         train.load_data()
+
+
+def test_trains_on_small_sample(sample_features_df):
+    """Both models fit a tiny cleaned frame without error."""
+    X = sample_features_df[train.FEATURE_COLUMNS].astype("float64")
+    y = sample_features_df[train.TARGET_COLUMN]
+
+    for builder in (train.build_xgb, train.build_lgbm):
+        model = builder()
+        model.fit(X, y)
+        proba = model.predict_proba(X)[:, 1]
+        assert len(proba) == len(y)
+        assert ((proba >= 0) & (proba <= 1)).all()
+
+
+def test_auc_above_half_on_sample(sample_features_df):
+    """A trained model must beat random on data it has seen."""
+    from sklearn.metrics import roc_auc_score
+
+    X = sample_features_df[train.FEATURE_COLUMNS].astype("float64")
+    y = sample_features_df[train.TARGET_COLUMN]
+
+    model = train.build_xgb()
+    model.fit(X, y)
+    assert roc_auc_score(y, model.predict_proba(X)[:, 1]) > 0.5
+
+
+def test_encoding_maps_created_with_mocked_mlflow(sample_features_df, mock_mlflow, tmp_path, monkeypatch):
+    """run_training exports encoding_maps.json without touching MLflow."""
+    data_path = tmp_path / "features.csv"
+    sample_features_df.to_csv(data_path, index=False)
+    monkeypatch.setenv("PROCESSED_DATA_PATH", str(data_path))
+
+    train.run_training()
+
+    maps_path = tmp_path / "encoding_maps.json"
+    assert maps_path.exists()
+    assert mock_mlflow.register_model.call_count == 1

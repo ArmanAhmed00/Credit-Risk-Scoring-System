@@ -161,6 +161,32 @@ services:
       start_period: 40s
     networks: [credit-risk]
 
+  streamlit-ui:
+    image: python:3.10-slim
+    container_name: credit-risk-ui
+    restart: unless-stopped
+    depends_on:
+      fastapi-inference:
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    working_dir: /app
+    volumes:
+      - ./app:/app/app
+      - ./monitoring/reports:/app/monitoring/reports:ro
+    environment:
+      # Service name, not localhost: the UI runs in its own container.
+      API_URL: http://fastapi-inference:8000
+      DRIFT_REPORT_DIR: /app/monitoring/reports
+    command: >
+      bash -c "
+        pip install --no-cache-dir -r app/requirements.txt &&
+        exec streamlit run app/streamlit_app.py
+          --server.port 8501 --server.address 0.0.0.0
+          --server.headless true --browser.gatherUsageStats false
+      "
+    networks: [credit-risk]
+
 volumes:
   postgres_data:
     name: credit_risk_postgres_data

@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import mlflow
 import pandas as pd
 from fastapi import BackgroundTasks, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -43,8 +42,11 @@ DEFAULT_MODEL_URI = f"models:/{MODEL_NAME}/Production"
 DEFAULT_TRACKING_URI = "http://localhost:5000"
 DEFAULT_ENCODING_MAPS_PATH = "data/processed/encoding_maps.json"
 DEFAULT_PREDICTION_LOG_PATH = "data/processed/prediction_log.jsonl"
+# Set this to serve a model file directly and skip MLflow entirely
+# (read-only/serverless hosts where the registry is unreachable).
+MODEL_BUNDLE_ENV = "MODEL_BUNDLE_PATH"
 
-# Risk bands: LOW < 0.3, MEDIUM 0.3-0.6 inclusive, HIGH > 0.6
+# LOW < 0.3, MEDIUM 0.3-0.6 inclusive, HIGH > 0.6
 LOW_THRESHOLD = 0.3
 HIGH_THRESHOLD = 0.6
 
@@ -71,9 +73,6 @@ class ModelBundle:
 bundle = ModelBundle()
 
 
-# --------------------------------------------------------------------------
-# Startup loading
-# --------------------------------------------------------------------------
 def get_model_uri() -> str:
     return os.environ.get("MODEL_URI", DEFAULT_MODEL_URI)
 
@@ -105,13 +104,41 @@ def load_encoding_maps(path: str | Path | None = None) -> dict[str, Any]:
     return maps
 
 
-def load_model(model_uri: str | None = None):
-    """Load the registered model as a native estimator exposing predict_proba.
+def load_model_bundle(path: str | Path):
+    """Load a plain XGBoost/LightGBM file, no MLflow involved."""
+    bundle = Path(path)
+    if not bundle.exists():
+        raise FileNotFoundError(f"Model bundle not found: {bundle}")
 
-    mlflow.pyfunc would return class labels rather than probabilities for these
-    flavors, which would silently break the risk bands, so the concrete flavor
-    is resolved from the MLmodel metadata instead.
+    if bundle.suffix in (".ubj", ".json", ".xgb"):
+        import xgboost as xgb
+
+        booster = xgb.Booster()
+        booster.load_model(str(bundle))
+        logger.info("Loaded XGBoost booster from %s", bundle)
+        return booster
+
+    import lightgbm as lgb
+
+    logger.info("Loaded LightGBM booster from %s", bundle)
+    return lgb.Booster(model_file=str(bundle))
+
+
+def load_model(model_uri: str | None = None):
+    """Load the model that will serve predictions.
+
+    Prefers a local bundle when MODEL_BUNDLE_PATH is set, otherwise pulls from
+    the MLflow registry. pyfunc is avoided because it returns class labels
+    rather than probabilities for these flavors, which would quietly break the
+    risk bands; the concrete flavor is resolved from the MLmodel metadata.
     """
+    bundle_path = os.environ.get(MODEL_BUNDLE_ENV)
+    if bundle_path:
+        return load_model_bundle(bundle_path)
+
+    import mlflow.lightgbm
+    import mlflow.xgboost
+
     uri = model_uri or get_model_uri()
     logger.info("Loading model from %s", uri)
 
@@ -132,6 +159,11 @@ def load_model(model_uri: str | None = None):
 
 def resolve_model_version(model_uri: str | None = None) -> str:
     """Best-effort registry lookup of the concrete version behind the URI."""
+    if os.environ.get(MODEL_BUNDLE_ENV):
+        # A bundle carries no registry metadata; the version is supplied by
+        # whatever exported it.
+        return os.environ.get("MODEL_VERSION", "bundle")
+
     uri = model_uri or get_model_uri()
     try:
         from mlflow.tracking import MlflowClient
@@ -159,7 +191,10 @@ def resolve_model_version(model_uri: str | None = None) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bundle.started_at = time.time()
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", DEFAULT_TRACKING_URI))
+    if not os.environ.get(MODEL_BUNDLE_ENV):
+        import mlflow
+
+        mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", DEFAULT_TRACKING_URI))
 
     try:
         bundle.encoding_maps = load_encoding_maps()
@@ -188,9 +223,6 @@ app = FastAPI(
 )
 
 
-# --------------------------------------------------------------------------
-# Middleware
-# --------------------------------------------------------------------------
 @app.middleware("http")
 async def log_response_time(request: Request, call_next):
     start = time.perf_counter()
@@ -204,9 +236,6 @@ async def log_response_time(request: Request, call_next):
     return response
 
 
-# --------------------------------------------------------------------------
-# Error handlers
-# --------------------------------------------------------------------------
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """422 for bad or missing input."""
@@ -249,9 +278,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# --------------------------------------------------------------------------
-# Prediction logging
-# --------------------------------------------------------------------------
 def write_prediction_log(entry: dict[str, Any], path: str | Path | None = None) -> None:
     """Append one JSON line. Runs in a background task, off the response path."""
     log_path = Path(path) if path is not None else get_prediction_log_path()
@@ -261,6 +287,11 @@ def write_prediction_log(entry: dict[str, Any], path: str | Path | None = None) 
         with _log_lock:  # serialize appends across worker threads
             with log_path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
+    except OSError:
+        # Serverless hosts give you a read-only filesystem. Losing the audit
+        # trail silently is worse than the write failing, so fall back to
+        # stdout, which every platform captures.
+        logger.info("PREDICTION_LOG %s", json.dumps(entry, default=str))
     except Exception:
         # An audit-log failure must never fail the prediction itself.
         logger.exception("Failed to write prediction log")
@@ -282,15 +313,21 @@ def predict_probability(model, features: dict[str, float]) -> float:
     if hasattr(model, "predict_proba"):
         return float(model.predict_proba(frame)[0][1])
 
+    # Raw boosters (bundle mode) already return the positive-class probability.
+    if type(model).__name__ == "Booster":
+        module = type(model).__module__
+        if module.startswith("xgboost"):
+            import xgboost as xgb
+
+            return float(model.predict(xgb.DMatrix(frame))[0])
+        return float(model.predict(frame)[0])
+
     # pyfunc fallback: may return a probability or a bare label.
     raw = model.predict(frame)
     value = float(getattr(raw, "iloc", raw)[0] if hasattr(raw, "iloc") else raw[0])
     return value
 
 
-# --------------------------------------------------------------------------
-# Routes
-# --------------------------------------------------------------------------
 @app.get("/health", response_model=HealthResponse)
 async def health():
     payload = HealthResponse(

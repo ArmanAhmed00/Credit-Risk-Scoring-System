@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Must equal data_cleaning.INCOME_SERVICEABLE_SHARE.
+# Keep in step with data_cleaning.INCOME_SERVICEABLE_SHARE.
 INCOME_SERVICEABLE_SHARE = 0.3
 
-# Must equal data_cleaning.OUTPUT_COLUMNS minus the label, and matches the
-# "feature_order" key written into encoding_maps.json by scripts/train.py.
+# data_cleaning.OUTPUT_COLUMNS minus the label. Same order as the
+# "feature_order" key in encoding_maps.json.
 FEATURE_ORDER = [
     "person_age",
     "person_income",
@@ -32,7 +32,7 @@ FEATURE_ORDER = [
     "cb_default_enc",
 ]
 
-# request field -> key inside encoding_maps.json -> encoded output column
+# request field -> encoding_maps.json key -> output column
 ENCODED_FIELDS = [
     ("person_home_ownership", "person_home_ownership", "home_ownership_enc"),
     ("loan_intent", "loan_intent", "loan_intent_enc"),

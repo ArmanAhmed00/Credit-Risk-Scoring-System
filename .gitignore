@@ -15,6 +15,20 @@ data/processed/*.jsonl
 mlruns/
 mlflow.db
 
+# Drift reports - ~4.5MB of HTML per run
+monitoring/reports/
+
+# Airflow task logs (bind-mounted by docker-compose)
+airflow/logs/
+
+# MLflow artifacts + registry DB (bind-mounted by docker-compose)
+mlflow/
+
+# Test/coverage artifacts
+.coverage
+coverage.xml
+.pytest_cache/
+
 # Secrets
 .env
 

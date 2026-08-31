@@ -1,0 +1,5 @@
+# Streamlit front end. It talks to the FastAPI service over HTTP and needs no
+# ML libraries of its own.
+streamlit==1.62.0
+httpx==0.28.1
+pandas==2.3.3

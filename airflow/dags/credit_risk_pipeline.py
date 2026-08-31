@@ -28,28 +28,26 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from airflow import DAG
 from airflow.exceptions import AirflowException, AirflowSkipException
 from airflow.models import Variable
 
+from airflow import DAG
+
 # Import paths moved to the standard provider package in Airflow 3.
 try:
-    from airflow.operators.python import BranchPythonOperator, PythonOperator
     from airflow.operators.empty import EmptyOperator
+    from airflow.operators.python import BranchPythonOperator, PythonOperator
     from airflow.sensors.filesystem import FileSensor
 except ImportError:  # pragma: no cover - Airflow 3 layout
+    from airflow.providers.standard.operators.empty import EmptyOperator
     from airflow.providers.standard.operators.python import (
         BranchPythonOperator,
         PythonOperator,
     )
-    from airflow.providers.standard.operators.empty import EmptyOperator
     from airflow.providers.standard.sensors.filesystem import FileSensor
 
 log = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------
-# Defaults. Every one is overridable by the matching Airflow Variable.
-# --------------------------------------------------------------------------
 DEFAULT_PROJECT_ROOT = "/opt/airflow/project"
 DEFAULT_RAW_RELPATH = "data/credit_risk_dataset.csv"
 DEFAULT_PROCESSED_RELPATH = "data/processed/features.csv"
@@ -60,8 +58,8 @@ DEFAULT_EXPERIMENT = "credit-risk-scoring"
 TASK_CLEAN = "clean_data"
 TASK_SKIP = "skip"
 
-# Jinja, so the Variable is read at task render time rather than on every DAG
-# parse. Variable.get() at module scope hits the metadata DB every ~30s.
+# Templated so the Variable is read when the task renders. Calling
+# Variable.get() at module scope would hit the metadata DB on every parse.
 RAW_PATH_TEMPLATE = (
     "{{ var.value.get('credit_risk_raw_path', "
     "var.value.get('credit_risk_project_root', '" + DEFAULT_PROJECT_ROOT + "') "
@@ -134,9 +132,6 @@ def _run_script(script_relpath: str, extra_env: dict[str, str], task_name: str) 
     return result.stdout
 
 
-# --------------------------------------------------------------------------
-# detect_new_data
-# --------------------------------------------------------------------------
 def detect_new_data(**context) -> str:
     """Run the pipeline only when raw data is newer than the processed output.
 
@@ -176,9 +171,6 @@ def detect_new_data(**context) -> str:
     return TASK_SKIP
 
 
-# --------------------------------------------------------------------------
-# clean_data
-# --------------------------------------------------------------------------
 def clean_data(**context) -> str:
     processed = _processed_path()
     _run_script(
@@ -193,9 +185,6 @@ def clean_data(**context) -> str:
     return str(processed)
 
 
-# --------------------------------------------------------------------------
-# save_to_postgres
-# --------------------------------------------------------------------------
 def save_to_postgres(**context) -> int:
     import pandas as pd
     from sqlalchemy import create_engine
@@ -236,9 +225,6 @@ def save_to_postgres(**context) -> int:
     return len(df)
 
 
-# --------------------------------------------------------------------------
-# train_model
-# --------------------------------------------------------------------------
 RUN_ID_PATTERN = re.compile(r"from run ([0-9a-f]{32})")
 
 
@@ -279,9 +265,6 @@ def train_model(**context) -> str:
     return run_id
 
 
-# --------------------------------------------------------------------------
-# promote_to_production
-# --------------------------------------------------------------------------
 def promote_to_production(**context) -> dict:
     import mlflow
     from mlflow.tracking import MlflowClient
@@ -344,9 +327,6 @@ def promote_to_production(**context) -> dict:
     return result
 
 
-# --------------------------------------------------------------------------
-# DAG
-# --------------------------------------------------------------------------
 default_args = {
     "owner": "credit-risk",
     "depends_on_past": False,

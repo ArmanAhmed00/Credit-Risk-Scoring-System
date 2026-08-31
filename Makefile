@@ -8,7 +8,7 @@ AIRFLOW_EXEC := $(COMPOSE) exec -T airflow
 PIPELINE_DAG := credit_risk_pipeline
 DRIFT_DAG    := drift_monitoring
 
-.PHONY: help up down logs train predict clean status drift
+.PHONY: help up down logs train predict clean status drift ui
 
 help:
 	@echo "Credit risk scoring system"
@@ -19,6 +19,7 @@ help:
 	@echo "  make status   Show service state and health"
 	@echo "  make train    Trigger the $(PIPELINE_DAG) DAG"
 	@echo "  make drift    Trigger the $(DRIFT_DAG) DAG"
+	@echo "  make ui       Launch the Streamlit web UI"
 	@echo "  make predict  Send a sample scoring request"
 	@echo "  make clean    DESTRUCTIVE - remove containers AND volumes"
 
@@ -53,6 +54,10 @@ train:
 drift:
 	$(AIRFLOW_EXEC) airflow dags unpause $(DRIFT_DAG)
 	$(AIRFLOW_EXEC) airflow dags trigger $(DRIFT_DAG)
+
+ui:
+	@echo "Starting Streamlit UI (API at $${API_URL:-http://127.0.0.1:8000})"
+	API_URL=$${API_URL:-http://127.0.0.1:8000} streamlit run app/streamlit_app.py
 
 predict:
 	@curl -sS -X POST $(API_URL)/predict \
