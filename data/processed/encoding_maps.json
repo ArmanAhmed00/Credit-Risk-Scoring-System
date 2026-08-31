@@ -1,0 +1,46 @@
+{
+  "person_home_ownership": {
+    "RENT": 0,
+    "OWN": 1,
+    "MORTGAGE": 2,
+    "OTHER": 3
+  },
+  "loan_intent": {
+    "PERSONAL": 0,
+    "EDUCATION": 1,
+    "MEDICAL": 2,
+    "VENTURE": 3,
+    "HOMEIMPROVEMENT": 4,
+    "DEBTCONSOLIDATION": 5
+  },
+  "loan_grade": {
+    "A": 1,
+    "B": 2,
+    "C": 3,
+    "D": 4,
+    "E": 5,
+    "F": 6,
+    "G": 7
+  },
+  "cb_person_default_on_file": {
+    "N": 0,
+    "Y": 1
+  },
+  "feature_order": [
+    "person_age",
+    "person_income",
+    "person_emp_length",
+    "loan_amnt",
+    "loan_int_rate",
+    "loan_percent_income",
+    "cb_person_cred_hist_length",
+    "debt_to_income",
+    "loan_to_income",
+    "credit_utilization",
+    "home_ownership_enc",
+    "loan_intent_enc",
+    "loan_grade_enc",
+    "cb_default_enc"
+  ],
+  "target_column": "loan_status"
+}
