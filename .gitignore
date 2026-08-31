@@ -5,10 +5,12 @@
 __pycache__/
 
 # Regenerable pipeline output (rebuild: python scripts/data_cleaning.py)
-data/processed/
+data/processed/*.csv
+data/*.csv
 
 # Secrets
 .env
 
 # macOS
 .DS_Store
+
